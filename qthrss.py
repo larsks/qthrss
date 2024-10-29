@@ -59,7 +59,7 @@ class QTHRSS:
         r"by Callsign (?P<callsign>[^ ,]+),? "
         r"(Modified on (?P<date_modified>\d\d/\d\d/\d\d),? )?"
         r"(Web Site: (?P<website>[^ ]+ ))?"
-        r"- IP: (?P<ip>.*)"
+        r"(.*)"
     )
 
     def __init__(self, entries_per_category=None):
@@ -132,10 +132,10 @@ class QTHRSS:
             if child.name == "dt":
                 title = child.text.strip()
             elif child.name == "dd":
-                description = "\n".join(child.text.splitlines()[:2])
+                description = child.text.splitlines()[:2]
                 published = None
                 updated = None
-                if mo := self.re_entry_metadata.search(description):
+                if mo := self.re_entry_metadata.search("\n".join(description)):
                     d_created = mo.group("date_created")
                     if d_created:
                         published = datetime.datetime.strptime(
@@ -151,14 +151,17 @@ class QTHRSS:
                     id = mo.group("listingid")
                     callsign = mo.group("callsign")
 
-                    description = "\n".join(
-                        [
-                            description,
-                            f'<a href="https://qrz.com/db/{callsign}"{callsign}</a>',
-                        ]
+                    description.append(
+                        f'<a href="https://qrz.com/db/{callsign}"{callsign}</a>',
                     )
+
+                    if website := mo.group("website"):
+                        description.append(
+                            f'<a href="{website}"{website}</a>',
+                        )
                 else:
-                    raise ValueError("unexpected data form")
+                    LOG.error("unexpected data format (%s)", title)
+                    continue
 
                 contact_url = child.find("a", string="Click to Contact")
                 photo_url = child.find("a", string="Click Here to View Picture")
@@ -168,7 +171,7 @@ class QTHRSS:
                         title=title,
                         published=published,
                         updated=updated,
-                        description=description,
+                        description="\n".join(description),
                         contact_url=urljoin(self.base_url, contact_url["href"]),
                         view_url=urljoin(
                             self.base_url,
@@ -252,7 +255,7 @@ def create_app():
     @app.route("/feeds.txt")
     def feeds_txt():
         caturls = [
-            f'http://{request.headers['host']}/feed/{urlquote(cat)}.xml'
+            f'http://{request.headers['host']}/feed/{urlquote(cat)}'
             for cat in qth.categories
         ]
         return Response("\n".join(caturls), mimetype="text/plain")
