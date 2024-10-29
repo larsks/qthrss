@@ -17,9 +17,10 @@ from flask import request
 from flask import jsonify
 
 LOG = logging.getLogger(__name__)
-CACHE_PATH = os.getenv('QTHRSS_CACHE_PATH', '.cache')
-CACHE_LIFETIME = int(os.getenv('QTHRSS_CACHE_LIFETIME', 3600))
-ENTRIES_PER_CATEGORY = int(os.getenv('QTHRSS_ENTRIES_PER_CATEGORY', 20))
+CACHE_PATH = os.getenv("QTHRSS_CACHE_PATH", ".cache")
+CACHE_LIFETIME = int(os.getenv("QTHRSS_CACHE_LIFETIME", 3600))
+ENTRIES_PER_CATEGORY = int(os.getenv("QTHRSS_ENTRIES_PER_CATEGORY", 20))
+
 
 @dataclass
 class Category:
@@ -46,9 +47,12 @@ class QTHRSS:
     entries_per_category = 20
     base_url = "https://swap.qth.com"
     category_listing_url = "index.php"
+    search_url = "search-results.php"
 
     def __init__(self, entries_per_category=None):
-        self.session = CachedSession(CACHE_PATH, backend="sqlite", serializer="json", expire_after=CACHE_LIFETIME)
+        self.session = CachedSession(
+            CACHE_PATH, backend="sqlite", serializer="json", expire_after=CACHE_LIFETIME
+        )
         self.listings = {}
         self.categories = {}
 
@@ -106,6 +110,9 @@ class QTHRSS:
         if not dl:
             return []
 
+        return self.listings_from_dl(dl)
+
+    def listings_from_dl(self, dl):
         listings: list[Listing] = []
         for child in dl[0].findChildren(recursive=False):
             if child.name == "dt":
@@ -137,7 +144,7 @@ class QTHRSS:
         feed = FeedGenerator()
         feed.id(category.url)
         feed.title(f"QTH Classifieds - {category.title}")
-        feed.link(href=category.url, rel="self")
+        feed.link(href=category.url, rel="alternate")
         feed.description(category.title)
 
         for listing in self.get_listings_for_category(category):
@@ -149,6 +156,38 @@ class QTHRSS:
             entry.description(listing.description)
 
         return feed
+
+    def simple_search_feed(self, query: str):
+        # This is only for display purposes
+        search_url = f"https://swap.qth.com/search-results.php?keywords={query}&fieldtosearch=titleordesc"
+
+        feed = FeedGenerator()
+        feed.id(search_url)
+        feed.title(f"QTH Classifieds - Search - {query}")
+        feed.link(href=search_url, rel="alternate")
+        feed.description(f"Search for {query}")
+
+        listings = self.simple_search(query)
+        for listing in listings:
+            entry = feed.add_entry()
+            entry.id(listing.view_url)
+            entry.title(listing.title)
+            entry.link(href=listing.view_url, rel="alternate")
+            entry.link(href=listing.contact_url, rel="related")
+            entry.description(listing.description)
+
+        return feed
+
+    def simple_search(self, query: str):
+        # https://swap.qth.com/search-results.php?keywords=tm-v71&fieldtosearch=titleordesc
+        soup = self.get_soup(
+            self.search_url, params={"keywords": query, "fieldtosearch": "titleordesc"}
+        )
+        dl = soup.select("table dl")
+        if not dl:
+            return []
+
+        return self.listings_from_dl(dl)
 
 
 def create_app():
@@ -163,25 +202,35 @@ def create_app():
     @app.route("/")
     def feeds():
         t = env.get_template("feeds.html")
-        caturls = {cat: f'{urlquote(cat)}.xml' for cat in qth.categories}
+        caturls = {cat: f"{urlquote(cat)}.xml" for cat in qth.categories}
         return t.render(categories=caturls)
 
     @app.route("/feeds.txt")
     def feeds_txt():
-        caturls = [f'http://{request.headers['host']}/feed/{urlquote(cat)}.xml' for cat in qth.categories]
-        return Response('\n'.join(caturls), mimetype='text/plain')
+        caturls = [
+            f'http://{request.headers['host']}/feed/{urlquote(cat)}.xml'
+            for cat in qth.categories
+        ]
+        return Response("\n".join(caturls), mimetype="text/plain")
 
     @app.route("/feed/<path:category_name>.xml")
     def feed_for(category_name: str):
         feed = qth.feed_for(category_name)
         return Response(feed.atom_str(), mimetype="application/atom+xml")
 
-    @app.route('/cache')
+    @app.route("/search/<keyword>")
+    def search(keyword: str):
+        feed = qth.simple_search_feed(keyword)
+        return Response(feed.atom_str(), mimetype="application/atom+xml")
+
+    @app.route("/cache")
     def cacheinfo():
         ci = qth.session.cache
-        return jsonify({
-            'count': ci.count(),
-            'urls': ci.urls(),
-        })
+        return jsonify(
+            {
+                "count": ci.count(),
+                "urls": ci.urls(),
+            }
+        )
 
     return app
