@@ -7,6 +7,11 @@ name = "pip_conf_index_install"
 bs4 = "*"
 requests = "*"
 lxml = "*"
+feedgen = "*"
+diskcache = "*"
+requests-cache = "*"
+flask = "*"
+gunicorn = "*"
 
 [dev-packages]
 

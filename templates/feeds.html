@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QTH RSS Feeds</title>
+  </head>
+  <body>
+  <ul>
+{% for title, link in categories.items() %}
+      <li><a href="/feed/{{ link }}">{{ title }}</a></li>
+{% endfor %}
+  </ul>
+  </body>
+</html>
