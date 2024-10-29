@@ -1,8 +1,10 @@
 import os
+import datetime
 import bs4
 import jinja2
 import itertools
 import logging
+import re
 
 from typing import override
 
@@ -35,6 +37,8 @@ class Category:
 @dataclass
 class Listing:
     title: str
+    published: datetime.datetime
+    updated: datetime.datetime | None
     description: str
     contact_url: str
     view_url: str
@@ -48,6 +52,13 @@ class QTHRSS:
     base_url = "https://swap.qth.com"
     category_listing_url = "index.php"
     search_url = "search-results.php"
+    re_entry_metadata = re.compile(
+        r"Listing #(?P<listingid>\d+) +- +Submitted on (?P<date_created>\d\d/\d\d/\d\d) "
+        r"by Callsign (?P<callsign>[^ ,]+),? "
+        r"(Modified on (?P<date_modified>\d\d/\d\d/\d\d),? )?"
+        r"(Web Site: (?P<website>[^ ]+ ) )?"
+        r"- IP: (?P<ip>.*)"
+    )
 
     def __init__(self, entries_per_category=None):
         self.session = CachedSession(
@@ -92,8 +103,9 @@ class QTHRSS:
                 }
             )
 
-    def get_listings_for_category(self, category: Category):
+    def get_listings_for_category(self, category_name: str):
         listings: list[Listing] = []
+        category = self.categories[category_name]
 
         page = itertools.count(start=1)
         while len(listings) < self.entries_per_category:
@@ -119,11 +131,27 @@ class QTHRSS:
                 title = child.text.strip()
             elif child.name == "dd":
                 description = "\n".join(child.text.splitlines()[:2])
+                published = None
+                updated = None
+                if mo := self.re_entry_metadata.search(description):
+                    d_created = mo.group("date_created")
+                    if d_created:
+                        published = datetime.datetime.strptime(
+                            d_created, "%m/%d/%y"
+                        ).replace(tzinfo=datetime.timezone.utc)
+
+                    d_modified = mo.group("date_modified")
+                    if d_modified:
+                        updated = datetime.datetime.strptime(
+                            d_modified, "%m/%d/%y"
+                        ).replace(tzinfo=datetime.timezone.utc)
                 contact_url = child.find("a", string="Click to Contact")
                 photo_url = child.find("a", string="Click Here to View Picture")
                 listings.append(
                     Listing(
                         title=title,
+                        published=published,
+                        updated=updated,
                         description=description,
                         contact_url=urljoin(self.base_url, contact_url["href"]),
                         view_url=urljoin(
@@ -138,6 +166,18 @@ class QTHRSS:
 
         return listings
 
+    def add_feed_entries(self, feed, listings):
+        for listing in listings:
+            entry = feed.add_entry()
+            entry.id(listing.view_url)
+            entry.title(listing.title)
+            entry.published(listing.published)
+            # LKS: feedgen may override this with current date/time
+            entry.updated(listing.updated)
+            entry.link(href=listing.view_url, rel="alternate")
+            entry.link(href=listing.contact_url, rel="related")
+            entry.description(listing.description)
+
     def feed_for(self, category_name: str):
         category = self.categories[category_name]
 
@@ -147,13 +187,7 @@ class QTHRSS:
         feed.link(href=category.url, rel="alternate")
         feed.description(category.title)
 
-        for listing in self.get_listings_for_category(category):
-            entry = feed.add_entry()
-            entry.id(listing.view_url)
-            entry.title(listing.title)
-            entry.link(href=listing.view_url, rel="alternate")
-            entry.link(href=listing.contact_url, rel="related")
-            entry.description(listing.description)
+        self.add_feed_entries(feed, self.get_listings_for_category(category.title))
 
         return feed
 
@@ -167,14 +201,7 @@ class QTHRSS:
         feed.link(href=search_url, rel="alternate")
         feed.description(f"Search for {query}")
 
-        listings = self.simple_search(query)
-        for listing in listings:
-            entry = feed.add_entry()
-            entry.id(listing.view_url)
-            entry.title(listing.title)
-            entry.link(href=listing.view_url, rel="alternate")
-            entry.link(href=listing.contact_url, rel="related")
-            entry.description(listing.description)
+        self.add_feed_entries(feed, self.simple_search(query))
 
         return feed
 
@@ -216,12 +243,12 @@ def create_app():
     @app.route("/feed/<path:category_name>.xml")
     def feed_for(category_name: str):
         feed = qth.feed_for(category_name)
-        return Response(feed.atom_str(), mimetype="application/atom+xml")
+        return Response(feed.atom_str(pretty=True), mimetype="application/atom+xml")
 
     @app.route("/search/<keyword>")
     def search(keyword: str):
         feed = qth.simple_search_feed(keyword)
-        return Response(feed.atom_str(), mimetype="application/atom+xml")
+        return Response(feed.atom_str(pretty=True), mimetype="application/atom+xml")
 
     @app.route("/cache")
     def cacheinfo():
