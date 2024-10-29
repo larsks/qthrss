@@ -36,6 +36,8 @@ class Category:
 
 @dataclass
 class Listing:
+    callsign: str
+    id: str
     title: str
     published: datetime.datetime
     updated: datetime.datetime | None
@@ -56,7 +58,7 @@ class QTHRSS:
         r"Listing #(?P<listingid>\d+) +- +Submitted on (?P<date_created>\d\d/\d\d/\d\d) "
         r"by Callsign (?P<callsign>[^ ,]+),? "
         r"(Modified on (?P<date_modified>\d\d/\d\d/\d\d),? )?"
-        r"(Web Site: (?P<website>[^ ]+ ) )?"
+        r"(Web Site: (?P<website>[^ ]+ ))?"
         r"- IP: (?P<ip>.*)"
     )
 
@@ -145,10 +147,24 @@ class QTHRSS:
                         updated = datetime.datetime.strptime(
                             d_modified, "%m/%d/%y"
                         ).replace(tzinfo=datetime.timezone.utc)
+
+                    id = mo.group("listingid")
+                    callsign = mo.group("callsign")
+
+                    description = "\n".join(
+                        [
+                            description,
+                            f'<a href="https://qrz.com/db/{callsign}"{callsign}</a>',
+                        ]
+                    )
+                else:
+                    raise ValueError("unexpected data form")
+
                 contact_url = child.find("a", string="Click to Contact")
                 photo_url = child.find("a", string="Click Here to View Picture")
                 listings.append(
                     Listing(
+                        id=id,
                         title=title,
                         published=published,
                         updated=updated,
@@ -158,6 +174,7 @@ class QTHRSS:
                             self.base_url,
                             contact_url["href"].replace("contact", "view_ad"),
                         ),
+                        callsign=callsign,
                         photo_url=urljoin(self.base_url, photo_url["href"])
                         if photo_url
                         else None,
@@ -169,14 +186,14 @@ class QTHRSS:
     def add_feed_entries(self, feed, listings):
         for listing in listings:
             entry = feed.add_entry()
-            entry.id(listing.view_url)
+            entry.guid(listing.view_url)
             entry.title(listing.title)
             entry.published(listing.published)
             # LKS: feedgen may override this with current date/time
             entry.updated(listing.updated)
             entry.link(href=listing.view_url, rel="alternate")
             entry.link(href=listing.contact_url, rel="related")
-            entry.description(listing.description)
+            entry.content(listing.description, type="html")
 
     def feed_for(self, category_name: str):
         category = self.categories[category_name]
@@ -229,7 +246,7 @@ def create_app():
     @app.route("/")
     def feeds():
         t = env.get_template("feeds.html")
-        caturls = {cat: f"{urlquote(cat)}.xml" for cat in qth.categories}
+        caturls = {cat: f"{urlquote(cat)}" for cat in qth.categories}
         return t.render(categories=caturls)
 
     @app.route("/feeds.txt")
@@ -240,8 +257,8 @@ def create_app():
         ]
         return Response("\n".join(caturls), mimetype="text/plain")
 
-    @app.route("/feed/<path:category_name>.xml")
-    def feed_for(category_name: str):
+    @app.route("/feed/<path:category_name>")
+    def atom_feed_for(category_name: str, kind: str = "atom"):
         feed = qth.feed_for(category_name)
         return Response(feed.atom_str(pretty=True), mimetype="application/atom+xml")
 

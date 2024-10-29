@@ -1,7 +1,7 @@
 bs4
 requests
 lxml
-feedgen
+git+https://github.com/larsks/python-feedgen@fix-link-bug
 requests-cache
 flask
 gunicorn
